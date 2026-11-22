@@ -59,7 +59,7 @@ export default function App() {
   const names = { tasks: 'My Tasks', changes: 'Change Controls', create: 'Create Change Control', reports: 'Reports', audit: 'Audit Trail', admin: 'Administration' };
   const crumb = page === 'cc' ? `Change Control · ${rec?.ccNumber || rec?.draftId || ''}` : names[page] || 'Dashboard';
   const tabKey = { overview: 'overview', assess: 'assess', actions: 'actions', docs: 'docs', history: 'history' }[b] || 'overview';
-  const common = { ctx, records, perform };
+  const common = { ctx, records, perform, go };
   const allowed = { tasks: ['employee', 'hod', 'ra_designee', 'qa_designee', 'ceo'], changes: ['employee', 'hod', 'ra_designee', 'qa_designee', 'ceo'], create: ['employee', 'hod', 'ra_designee', 'qa_designee'], reports: ['hod', 'qa_designee', 'ceo'], admin: ['admin'], audit: ['admin'] };
   const denied = page && allowed[page] && !hasRole(user, ...allowed[page]);
   let view;
@@ -70,7 +70,7 @@ export default function App() {
     else view = <Workspace {...common} rec={rec} tab={tabKey} openAction={c || null} setTab={(t) => go(`/cc/${rec.id}/${t}`)} onBack={() => window.history.back()} onEdit={() => go(`/cc/${rec.id}/edit`)} onBehalf={() => null} />;
   } else if (page === 'create') view = <Create {...common} onCreate={createRecord} onCancel={() => go('/')} />;
   else if (page === 'tasks') view = <><PageHead title="My Tasks" sub="One inbox: endorsements, reviews, action items, clarifications, corrections, extension approvals and QA decisions – each opens directly on the required action" /><Card pad={false}><TaskTable tasks={tasks} open={open} /></Card></>;
-  else if (page === 'changes') view = <Register {...common} open={open} />;
+  else if (page === 'changes') view = <Register {...common} open={open} go={go} />;
   else if (page === 'reports') view = <Reports {...common} open={open} />;
   else if (page === 'audit') view = <AuditPage records={records} admin={db.admin} />;
   else if (page === 'admin') view = <Admin db={db} setDb={setDb} onReset={() => { const d = resetDB(); dbRef.current = d; setDbRaw(d); saveDB(d); notify('Demo data reset'); go('/'); }} />;

@@ -58,7 +58,7 @@ export function Dashboard({ ctx, records, tasks, open, go }) {
       <Card title="Administrator access"><div className="row"><Button onClick={() => go('/admin')}>Administration</Button><Button onClick={() => go('/audit')}>Audit Trail</Button></div><div className="small muted mt">The System Administrator manages users, roles, settings and the system-wide audit trail; Change Control content is not shown here.</div></Card></>);
   return (
     <>
-      <PageHead title={`Welcome, ${first}`} sub={`${u.title} · ${u.dept}`} right={hasRole(u, 'employee', 'hod', 'ra_designee', 'qa_designee') && <Button variant="primary" icon={Plus} onClick={() => go('/create')}>Create Change Control</Button>} />
+      <PageHead title={`Welcome, ${first}`} sub={`${u.title} · ${u.dept}`} />
       <div className="grid g3 mb">
         <div className="card kpi"><div className="l">My tasks</div><div className="v">{tasks.length}</div><div className="s">waiting for you</div></div>
         <div className="card kpi"><div className="l">{site ? 'Open Change Controls (site)' : 'My open Change Controls'}</div><div className="v">{site ? active.length : mine.length}</div><div className="s">{site ? 'all departments' : 'initiated by me'}</div></div>
@@ -74,13 +74,13 @@ export function Dashboard({ ctx, records, tasks, open, go }) {
   );
 }
 
-export function Register({ records, ctx, open, perform }) {
+export function Register({ records, ctx, open, perform, go }) {
   const [q, setQ] = useState(''); const [view, setView] = useState('open'); const [st, setSt] = useState('All'); const [quick, setQuick] = useState(null); const [modal, setModal] = useState(null);
   const vis = records.filter((r) => E.canViewRecord(r, ctx.user));
   const list = vis.filter((r) => (view === 'all' || (view === 'open' ? !E.isFinal(r) : E.isFinal(r))) && (st === 'All' || r.status === st) && (!q || (label(r) + ' ' + r.title).toLowerCase().includes(q.toLowerCase())));
   return (
     <>
-      <PageHead title="Change Controls" sub="Search by CC number or title keywords; open requests are shown first" />
+      <PageHead title="Change Controls" sub="Search by CC number or title keywords; open requests are shown first" right={hasRole(ctx.user, 'employee', 'hod', 'ra_designee', 'qa_designee') && <Button variant="primary" icon={Plus} onClick={() => go('/create')}>Create Change Control</Button>} />
       <Card pad={false}>
         <div className="row wrap" style={{ padding: 14, borderBottom: '1px solid var(--line)' }}>
           <div className="grow" style={{ position: 'relative', minWidth: 260 }}><Search size={16} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--muted)' }} /><Input style={{ paddingLeft: 32 }} placeholder="CC number or title keywords" value={q} onChange={(e) => setQ(e.target.value)} /></div>
