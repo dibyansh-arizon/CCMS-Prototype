@@ -5,6 +5,7 @@ import { Button, Card, Banner, Field, Input, TextArea, Select, Seg, FilePicker, 
 import { ASSESSMENT_BY_KEY, RISK_QUESTIONS, CLOSEOUT_QUESTIONS, STATUS as S, YNNA } from '../data/forms.js';
 import { userById, EMPLOYEES } from '../data/people.js';
 import { AssessmentForm, RegulatoryForm, ActionEditor, blankAction, cleanActions } from './Forms.jsx';
+import { ChangeTable } from './ChangeTable.jsx';
 import { fmtDate } from '../util.js';
 
 const Panel = ({ title, sub, tone = '', children, right }) => (
@@ -19,7 +20,7 @@ function DeptHeadPanel({ rec, perform }) {
   const [c, setC] = useState('');
   const go = (decision, sign, label) => perform(rec, E.endorse, [{ decision, comment: c }], { sign, summary: `${label} ${rec.draftId}`, success: label + ' – done' });
   return (
-    <Panel title="Your action: review and decide" sub="Stage 1 · Department Head endorsement">
+    <Panel title={rec.status === S.REENDORSE ? "Your action: re-endorse the corrected request" : "Your action: review and decide"} sub={rec.status === S.REENDORSE ? "Stage 1 · after your re-endorsement ALL designated HODs reassess and sign again" : "Stage 1 · HOD endorsement"}>
       <Banner tone="info" icon={ShieldCheck}>Endorsement forwards the request to QA screening. <b>It does not authorize implementation.</b></Banner>
       <Field label="Comment" help="Mandatory for Return for Correction and Reject."><TextArea value={c} onChange={(e) => setC(e.target.value)} /></Field>
       <div className="row wrap">
@@ -66,21 +67,21 @@ function AssessmentPanel({ rec, keys, perform, ctx, onBehalf }) {
   return (
     <Panel title={`Your action: complete the ${def.shortName === 'QAD Assessment' ? 'QAD' : def.shortName} assessment`} sub="Stage 3 · parallel departmental assessment – only your department's checklist is shown">
       {keys.length > 1 && <div className="row">{keys.map((x) => <Button key={x} sm variant={x === key ? 'primary' : ''} onClick={() => setK(x)}>{ASSESSMENT_BY_KEY[x].shortName}</Button>)}</div>}
-      <AssessmentForm key={key} def={def} assessment={a} actingFor={onBehalf(rec, key)}
+      <AssessmentForm key={key} def={def} assessment={a} actingFor={onBehalf(rec, key)} round={rec.round || 1} existingActions={rec.actions.filter((x) => x.sourceKey === key && x.status === 'Planned')}
         onSubmit={(p) => perform(rec, E.assess, [key, p], { key, sign: p.decision === 'clarify' ? null : 'Assessment decision', summary: `${def.shortName}: ${p.decision}`, success: p.decision === 'clarify' ? 'Clarification request sent' : 'Assessment submitted' })} />
     </Panel>
   );
 }
-function ClarifyPanel({ rec, keys, perform }) {
+function ClarifyPanel({ rec, perform }) {
   const [t, setT] = useState('');
-  const key = keys[0];
-  const a = rec.assessments.find((x) => x.key === key);
-  const c = a.clarifications[a.clarifications.length - 1];
+  const [rows, setRows] = useState(rec.changes.map((x) => ({ ...x })));
+  const c = rec.clarification;
   return (
-    <Panel title={`Your action: answer clarification – ${ASSESSMENT_BY_KEY[key].shortName}`} sub="Only this assessment is paused; the others continue">
-      <Banner tone="warn"><b>{c.by} asks:</b> {c.q}</Banner>
+    <Panel title="Your action: respond to the clarification / correction request" sub={`Stage 3 · requested by ${c?.source} · after your response the request returns to your HOD for re-endorsement, then ALL HODs reassess`}>
+      <Banner tone="warn"><b>{c?.by} asks:</b> {c?.q}</Banner>
+      <div><div className="lbl mb">Correct the change table if needed</div><ChangeTable rows={rows} onChange={setRows} /></div>
       <Field label="Your response" req><TextArea value={t} onChange={(e) => setT(e.target.value)} /></Field>
-      <div><Button variant="primary" icon={Send} onClick={() => perform(rec, E.respondClarification, [key, t], { success: 'Response sent to the reviewer' })}>Send response</Button></div>
+      <div><Button variant="primary" icon={Send} onClick={() => perform(rec, E.respondClarification, [{ text: t, changes: rows }], { success: 'Response sent – returned to your HOD for re-endorsement' })}>Send to HOD for re-endorsement</Button></div>
     </Panel>
   );
 }
@@ -104,16 +105,6 @@ function RegPanel({ rec, perform }) {
   return (
     <Panel title="Your action: regulatory assessment" sub="Stage 4 · Regulatory Affairs – regulatory action and client approval requirements">
       <RegulatoryForm rec={rec} onSubmit={(p) => perform(rec, E.regulatory, [p], { sign: p.decision === 'clarify' ? null : 'Regulatory review', summary: 'Complete the regulatory assessment', success: p.decision === 'clarify' ? 'Clarification request sent' : 'Regulatory assessment completed' })} />
-    </Panel>
-  );
-}
-function RegRespondPanel({ rec, perform }) {
-  const [t, setT] = useState('');
-  return (
-    <Panel title="Your action: answer regulatory clarification" sub="Stage 4 · Regulatory Affairs">
-      <Banner tone="warn"><b>Regulatory Affairs asks:</b> {rec.reg.clarification.q}</Banner>
-      <Field label="Your response" req><TextArea value={t} onChange={(e) => setT(e.target.value)} /></Field>
-      <div><Button variant="primary" icon={Send} onClick={() => perform(rec, E.respondRegClarification, [t], { success: 'Response sent' })}>Send response</Button></div>
     </Panel>
   );
 }
@@ -195,6 +186,7 @@ function ApprovalPanel({ rec, ctx, perform }) {
   const [comments, setComments] = useState('');
   const [due, setDue] = useState(E.isoDate(E.addDays(new Date(), ctx.settings.defaultDueDays)));
   const [rows, setRows] = useState([]);
+  const [raOk, setRaOk] = useState(false);
   const blockers = E.approvalBlockers(rec, ctx.settings);
   const latest = E.latestActionDue(rec, new Date());
   const addMit = () => {
@@ -205,7 +197,7 @@ function ApprovalPanel({ rec, ctx, perform }) {
   };
   let grp = '';
   return (
-    <Panel title="Your action: risk assessment and final approval" sub="Stage 6 · QA reviews the complete package, assesses risk and sets the overall due date">
+    <Panel title="Your action: risk assessment and final approval" sub="Stage 6 · QA Designee reviews the complete package, assesses risk and sets the overall due date">
       <div className="grid g2">
         <div className="card pad" style={{ background: '#fafbfd' }}>
           <div className="section-t">Departmental assessments</div>
@@ -219,6 +211,7 @@ function ApprovalPanel({ rec, ctx, perform }) {
           <div className="small mt-s">Action items in plan: <b>{rec.actions.length}</b> · latest due {fmtDate(latest) || '—'}</div>
         </div>
       </div>
+      {rec.reg && <div className={`banner ${rec.reg.clientRequired ? 'warn' : ''}`}><div className="grow"><label className="chk" style={{ width: 'fit-content' }}><input type="checkbox" checked={raOk} onChange={(e) => setRaOk(e.target.checked)} /><b>I have reviewed the RA determination</b></label><div className="small mt-s">Regulatory action: {rec.reg.regActionRequired ? 'Yes' : 'No'} · Client approval: {rec.reg.clientRequired ? `Required (${rec.reg.clientName}) – related action is in the common action list` : 'Not required'}. {rec.reg.clientRequired && <span className="muted">Timing gate for client/regulatory approval is an open decision.</span>}</div></div></div>}
       {blockers.map((b, i) => <Banner key={i} tone="danger" icon={Lock}><b>Approval blocked.</b> {b}</Banner>)}
       <div>
         <div className="lbl">Risk Assessment <span className="muted" style={{ fontWeight: 400 }}>(answer all questions with respect to the change)</span></div>
@@ -239,7 +232,7 @@ function ApprovalPanel({ rec, ctx, perform }) {
         <Field label="Comments (mandatory for Return / Reject)"><TextArea style={{ minHeight: 60 }} value={comments} onChange={(e) => setComments(e.target.value)} /></Field>
       </div>
       <div className="row wrap">
-        <Button variant="success" icon={ShieldCheck} disabled={blockers.length > 0} onClick={() => perform(rec, E.qaApprove, [{ decision: 'approve', answers: ans, otherRisks: other, comments, dueDate: due }], { sign: 'Final approval', summary: `Approve ${rec.ccNumber} and authorize implementation`, success: 'Approved – implementation authorized' })}>Approve &amp; authorize implementation</Button>
+        <Button variant="success" icon={ShieldCheck} disabled={blockers.length > 0} onClick={() => perform(rec, E.qaApprove, [{ decision: 'approve', answers: ans, otherRisks: other, comments, dueDate: due, raReviewed: raOk }], { sign: 'Final approval', summary: `Approve ${rec.ccNumber} and authorize implementation`, success: 'Approved – implementation authorized' })}>Approve &amp; authorize implementation</Button>
         <Button icon={Undo2} onClick={() => perform(rec, E.qaApprove, [{ decision: 'return', comments }], { success: 'Returned to initiator' })}>Return for Correction</Button>
         <Button variant="danger" icon={XCircle} onClick={() => perform(rec, E.qaApprove, [{ decision: 'reject', answers: ans, otherRisks: other, comments }], { sign: 'Final rejection', summary: `Reject ${rec.ccNumber}`, success: 'Change Control rejected' })}>Reject</Button>
       </div>
@@ -284,6 +277,8 @@ function CloseoutPanel({ rec, perm, perform }) {
   const [cancel, setCancel] = useState('');
   const checks = E.closeoutChecks(rec);
   const ok = checks.every((c) => c.ok);
+  const [flag, setFlag] = useState(checks.find((c) => c.missing)?.missing || []);
+  const toggleFlag = (id) => setFlag((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   return (
     <Panel title="Your action: QA closeout" sub="Stage 8 · verify, confirm the closeout questions and close the Change Control">
       <div>
@@ -297,20 +292,34 @@ function CloseoutPanel({ rec, perm, perform }) {
         )))}
       </div>
       <Field label="Final disposition"><div className="chk on" style={{ width: 'fit-content' }}>The change was implemented, and the request is considered closed</div></Field>
+      {!ok && <Banner tone="warn" icon={AlertTriangle}><b>Close is unavailable until every verification item is met.</b> Use <b>Return for Correction</b>: the CC returns to the initiator under the same CC number; flagged actions are highlighted, the initiator returns them to their owners, then resubmits to you.</Banner>}
+      {!ok && <Field label="Flag the action items that need correction"><div className="row wrap">{rec.actions.map((a) => <label key={a.id} className={`chk ${flag.includes(a.id) ? 'on' : ''}`}><input type="checkbox" checked={flag.includes(a.id)} onChange={() => toggleFlag(a.id)} />{a.id} · {a.description.slice(0, 36)}</label>)}</div></Field>}
       <Field label="Comment (mandatory for Return)"><Input value={comment} onChange={(e) => setComment(e.target.value)} /></Field>
-      {perm.cancel && <Field label="If cancelling – explain (Head of QAD only)"><Input value={cancel} onChange={(e) => setCancel(e.target.value)} /></Field>}
+      {perm.cancel && <Field label="If cancelling – explain (QA Designee)"><Input value={cancel} onChange={(e) => setCancel(e.target.value)} /></Field>}
       <div className="row wrap">
         <Button variant="success" icon={ShieldCheck} disabled={!ok} onClick={() => perform(rec, E.closeout, [{ decision: 'close', answers: ans, comment }], { sign: 'Closure', summary: `Close ${rec.ccNumber}`, success: 'Change Control closed and archived' })}>Close &amp; archive</Button>
-        <Button icon={Undo2} onClick={() => perform(rec, E.closeout, [{ decision: 'return', comment }], { success: 'Returned to initiator (same CC number)' })}>Return for Correction</Button>
+        <Button icon={Undo2} onClick={() => perform(rec, E.closeout, [{ decision: 'return', comment, flagActions: flag }], { success: 'Returned to initiator (same CC number)' })}>Return for Correction</Button>
         {perm.cancel && <Button variant="danger" icon={XCircle} onClick={() => perform(rec, E.closeout, [{ decision: 'cancel', cancelReason: cancel, answers: ans }], { sign: 'Cancellation', summary: `Cancel / void ${rec.ccNumber}`, success: 'Change Control cancelled' })}>Cancel / Void</Button>}
       </div>
+    </Panel>
+  );
+}
+function ResubmitCloseoutPanel({ rec, perform, setTab }) {
+  const flagged = rec.actions.filter((a) => a.flagged);
+  const open = rec.actions.filter((a) => !['Completed', 'Cancelled'].includes(a.status));
+  return (
+    <Panel title="Your action: correct and resubmit to QA closeout" sub="Stage 8 · QA returned the closeout – the CC number stays the same">
+      <ReturnedNote rec={rec} />
+      {flagged.map((a) => <div key={a.id} className="qrow"><span><b>{a.id}</b> · {a.description}<div className="help">Owner {userById(a.ownerId)?.name} · {a.status}</div></span><Badge tone="orange">Flagged</Badge></div>)}
+      <div className="banner info"><div className="grow"><b>How to fix:</b> Actions tab → <b>Review → Return action for correction</b> on each flagged action; the owner adds evidence (or marks “no evidence applicable”). When all actions are Completed again, resubmit here.</div></div>
+      <div className="row wrap"><Button onClick={() => setTab('actions')}>Open Actions tab</Button><Button variant="primary" icon={Send} disabled={open.length > 0} onClick={() => perform(rec, E.resubmitCloseout, [], { sign: 'Implementation re-verified', summary: `Resubmit ${rec.ccNumber} for QA closeout`, success: 'Resubmitted to QA closeout' })}>Resubmit to QA closeout</Button>{open.length > 0 && <span className="small muted">Waiting for {open.map((a) => a.id).join(', ')}.</span>}</div>
     </Panel>
   );
 }
 export function CancelOnlyPanel({ rec, perform }) {
   const [cancel, setCancel] = useState('');
   return (
-    <Panel tone="wait" title="Cancel / void (Head of QAD)" sub="Only when issues arise during implementation (documented justification required)">
+    <Panel tone="wait" title="Cancel / void (pending QA/Management confirmation)" sub="Only when issues arise during implementation (documented justification required)">
       <Field label="Justification" req><Input value={cancel} onChange={(e) => setCancel(e.target.value)} /></Field>
       <div><Button variant="danger" icon={XCircle} onClick={() => perform(rec, E.closeout, [{ decision: 'cancel', cancelReason: cancel }], { sign: 'Cancellation', summary: `Cancel / void ${rec.ccNumber}`, success: 'Change Control cancelled' })}>Cancel / Void</Button></div>
     </Panel>
@@ -340,14 +349,14 @@ export function ReturnedNote({ rec }) {
 export default function Panels({ rec, ctx, perm, perform, records, onBehalf, openExt, openAmd, setTab, onEdit }) {
   const out = [];
   if (E.isFinal(rec)) return <FinalPanel rec={rec} />;
+  if (perm.resubmitCloseout) out.push(<ResubmitCloseoutPanel key="rsc" rec={rec} perform={perform} setTab={setTab} />);
   if (perm.edit) out.push(<Panel key="edit" title="Your action: complete and submit" sub={rec.status === S.RETURNED ? 'Correct the request and resubmit' : 'Stage 1 · complete Sections I and III, then submit to your Department Head'}><ReturnedNote rec={rec} /><div><Button variant="primary" onClick={onEdit}>{rec.status === S.RETURNED ? 'Edit and resubmit' : 'Continue editing'}</Button></div></Panel>);
   if (perm.endorse) out.push(<DeptHeadPanel key="end" rec={rec} perform={perform} />);
   if (perm.screen) out.push(<ScreeningPanel key="scr" rec={rec} perform={perform} records={records} />);
   if (perm.assessKeys.length) out.push(<AssessmentPanel key="ass" rec={rec} keys={perm.assessKeys} perform={perform} ctx={ctx} onBehalf={onBehalf} />);
-  if (perm.respondKeys.length) out.push(<ClarifyPanel key="cl" rec={rec} keys={perm.respondKeys} perform={perform} />);
+  if (perm.respond) out.push(<ClarifyPanel key="cl" rec={rec} perform={perform} />);
   if (perm.resolveKeys.length) out.push(<ResolvePanel key="rs" rec={rec} keys={perm.resolveKeys} perform={perform} />);
   if (perm.regulatory) out.push(<RegPanel key="reg" rec={rec} perform={perform} />);
-  if (perm.regRespond) out.push(<RegRespondPanel key="rr" rec={rec} perform={perform} />);
   if (perm.consolidate) out.push(<ConsolidationPanel key="con" rec={rec} ctx={ctx} perform={perform} />);
   if (perm.approve) out.push(<ApprovalPanel key="app" rec={rec} ctx={ctx} perform={perform} />);
   if (perm.closeout) out.push(<CloseoutPanel key="clo" rec={rec} perm={perm} perform={perform} />);

@@ -7,7 +7,7 @@ export const Badge = ({ tone = '', children }) => <span className={cx('badge', t
 
 const STATUS_TONE = {
   [S.DRAFT]: '', [S.RETURNED]: 'orange', [S.PEND_ENDORSE]: 'blue', [S.PEND_SCREEN]: 'blue', [S.ASSESS]: 'blue', [S.REG]: 'blue',
-  [S.CONSOL]: 'blue', [S.QA_APPROVAL]: 'blue', [S.IMPL]: 'orange', [S.CLOSEOUT]: 'blue', [S.CLOSED]: 'green', [S.REJECTED]: 'red', [S.CANCELLED]: 'red',
+  [S.CONSOL]: 'blue', [S.QA_APPROVAL]: 'blue', [S.IMPL]: 'orange', [S.CLOSEOUT]: 'blue', [S.CLOSED]: 'green', [S.REJECTED]: 'red', [S.CANCELLED]: 'red', [S.CLARIFY]: 'orange', [S.REENDORSE]: 'blue',
 };
 export const StatusBadge = ({ status }) => <Badge tone={STATUS_TONE[status]}>{status}</Badge>;
 export const ASSESS_TONE = { Pending: '', 'Clarification Requested': 'orange', Accepted: 'green', 'Accepted with Action': 'green', 'Not Acceptable': 'red' };

@@ -7,8 +7,8 @@
 // ctx = { user, eff (ids the user may act for), effUsers, now (Date), signature?,
 //         settings, issueNumber(), nextDraft() }
 // ---------------------------------------------------------------------------
-import { ASSESSMENTS, ASSESSMENT_BY_KEY, STATUS as S, RISK_QUESTIONS, CLOSEOUT_QUESTIONS, EXTENSION_LEVELS } from './data/forms.js';
-import { USERS, DEPT_HEAD, userById, ROLES } from './data/people.js';
+import { ASSESSMENTS, ASSESSMENT_BY_KEY, STATUS as S, RISK_QUESTIONS, CLOSEOUT_QUESTIONS, MAX_EXTENSIONS, extensionChain } from './data/forms.js';
+import { USERS, DEPT_HEAD, userById, roleLabel, hasRole as hasR, isQadHod } from './data/people.js';
 
 export class WorkflowError extends Error {}
 const fail = (m) => {
@@ -42,7 +42,7 @@ function log(r, ctx, action, detail = '', meaning = null) {
     at: ctx.now.toISOString(),
     actorId: ctx.user.id,
     actor: ctx.user.name,
-    role: ROLES[ctx.user.roleId].label,
+    role: roleLabel(ctx.user),
     action,
     detail,
     signature: meaning
@@ -50,7 +50,8 @@ function log(r, ctx, action, detail = '', meaning = null) {
       : null,
   });
 }
-const hasRole = (ctx, ...roles) => ctx.effUsers.some((u) => roles.includes(u.roleId));
+const ALIAS = { qa_head: 'qa_designee', ra_head: 'ra_designee' };
+const hasRole = (ctx, ...roles) => ctx.effUsers.some((u) => hasR(u, ...roles.map((x) => ALIAS[x] || x)));
 const requireText = (v, msg) => {
   if (!v || !String(v).trim()) fail(msg);
 };
@@ -63,6 +64,10 @@ export function stageOf(r) {
       return 1;
     case S.PEND_SCREEN:
       return 2;
+    case S.CLARIFY:
+      return 3;
+    case S.REENDORSE:
+      return 1;
     case S.ASSESS:
       return 3;
     case S.REG:
@@ -90,32 +95,45 @@ export const isOverdue = (a, now = new Date()) => a.due && a.status !== 'Complet
 export function perms(r, ctx) {
   const eff = ctx.eff;
   const isInit = eff.includes(r.initiatorId);
-  const qa = hasRole(ctx, 'qa_designee', 'qa_head') && !isInit;
+  const qa = hasRole(ctx, 'qa_designee') && !isInit;
   const allDone = r.actions.filter((a) => a.status !== 'Cancelled').every((a) => a.status === 'Completed');
   return {
     isInitiator: isInit,
-    edit: isInit && [S.DRAFT, S.RETURNED].includes(r.status),
-    endorse: r.status === S.PEND_ENDORSE && eff.includes(DEPT_HEAD[r.department]) && !isInit,
+    edit: isInit && (r.status === S.DRAFT || (r.status === S.RETURNED && r.returnStage !== 8)),
+    respond: isInit && r.status === S.CLARIFY,
+    resubmitCloseout: isInit && r.status === S.RETURNED && r.returnStage === 8,
+    endorse: [S.PEND_ENDORSE, S.REENDORSE].includes(r.status) && eff.includes(DEPT_HEAD[r.department]) && !isInit,
     screen: r.status === S.PEND_SCREEN && qa,
-    assessKeys:
-      r.status === S.ASSESS
-        ? r.assessments.filter((a) => a.status === 'Pending' && a.assignees.some((id) => eff.includes(id))).map((a) => a.key)
-        : [],
-    respondKeys: r.status === S.ASSESS && isInit ? r.assessments.filter((a) => a.status === 'Clarification Requested').map((a) => a.key) : [],
+    assessKeys: r.status === S.ASSESS ? r.assessments.filter((a) => a.status === 'Pending' && a.assignees.some((id) => eff.includes(id))).map((a) => a.key) : [],
     resolveKeys: r.status === S.ASSESS && qa ? r.assessments.filter((a) => a.status === 'Not Acceptable').map((a) => a.key) : [],
-    regulatory: r.status === S.REG && hasRole(ctx, 'ra_head') && !(r.reg?.clarification && !r.reg.clarification.a),
-    regRespond: r.status === S.REG && isInit && !!r.reg?.clarification && !r.reg.clarification.a,
+    regulatory: r.status === S.REG && hasRole(ctx, 'ra_designee'),
     consolidate: r.status === S.CONSOL && isInit,
-    approve: r.status === S.QA_APPROVAL && hasRole(ctx, 'qa_head') && !isInit,
+    approve: r.status === S.QA_APPROVAL && qa,
     closeout: r.status === S.CLOSEOUT && qa,
-    cancel: [S.IMPL, S.CLOSEOUT].includes(r.status) && hasRole(ctx, 'qa_head') && !isInit,
+    cancel: [S.IMPL, S.CLOSEOUT].includes(r.status) && qa,
     verify: r.status === S.IMPL && isInit && allDone && r.actions.length > 0 && !r.amendments.some((a) => a.status === 'Pending'),
     allDone,
-    manageActions: ([S.CONSOL, S.QA_APPROVAL, S.IMPL].includes(r.status) || (r.status === S.RETURNED && r.returnStage === 6)) && (isInit || hasRole(ctx, 'qa_designee', 'qa_head')),
+    manageActions: ([S.CONSOL, S.QA_APPROVAL, S.IMPL].includes(r.status) || (r.status === S.RETURNED && r.returnStage === 6)) && (isInit || qa),
     requestExtension: r.status === S.IMPL && isInit,
     requestAmendment: r.status === S.IMPL && isInit,
-    decideAmendment: r.status === S.IMPL && hasRole(ctx, 'qa_designee', 'qa_head') && !isInit,
+    decideAmendment: r.status === S.IMPL && qa,
+    attach: canAttach(r, ctx),
   };
+}
+// Who may upload documents (preview is open to everyone who can open the record)
+export function canAttach(r, ctx) {
+  if ([S.CLOSED, S.REJECTED, S.CANCELLED].includes(r.status)) return false;
+  const u = ctx.user;
+  return r.initiatorId === u.id || hasRole(ctx, 'qa_designee', 'ra_designee') || r.assessments.some((a) => a.assignees.includes(u.id)) || DEPT_HEAD[r.department] === u.id || r.actions.some((a) => a.ownerId === u.id);
+}
+// "Authorized records": System Admin has no CC record access (Administration and Audit Trail only)
+export function canViewRecord(r, u) {
+  if (hasR(u, 'qa_designee', 'ceo')) return true;
+  if (hasR(u, 'admin')) return false;
+  if (r.initiatorId === u.id || r.actions.some((a) => a.ownerId === u.id) || r.assessments.some((a) => a.assignees.includes(u.id))) return true;
+  if (hasR(u, 'ra_designee') && r.ccNumber) return true;
+  if (hasR(u, 'hod') && (DEPT_HEAD[r.department] === u.id || r.department === u.dept || isQadHod(u))) return true;
+  return false;
 }
 export const canWorkOnAction = (r, a, ctx) =>
   ctx.eff.includes(a.ownerId) &&
@@ -123,7 +141,7 @@ export const canWorkOnAction = (r, a, ctx) =>
 
 // Assessment content is only visible to its own reviewers while assessments are running
 export function canViewAssessment(r, a, ctx) {
-  if (ctx.user.roleId === 'auditor') return true;
+  if (hasR(ctx.user, 'ceo', 'qa_designee') && ![S.ASSESS, S.CLARIFY, S.REENDORSE].includes(r.status)) return true;
   if (a.assignees.some((id) => ctx.eff.includes(id))) return true;
   return ![S.ASSESS].includes(r.status) && stageOf(r) > 3;
 }
@@ -131,8 +149,7 @@ export function canViewAssessment(r, a, ctx) {
 // ------------------------------------------------------------------ helpers
 export const deptHead = (r) => userById(DEPT_HEAD[r.department]);
 function assigneesFor(def, r) {
-  if (def.key === 'training') return [DEPT_HEAD[r.department]];
-  return USERS.filter((u) => def.roles.includes(u.roleId)).map((u) => u.id);
+  return def.key === 'training' ? [DEPT_HEAD[r.department]] : [...def.heads];
 }
 export function assigneeLabel(r, a) {
   const names = a.assignees.map((id) => userById(id)?.name).filter(Boolean);
@@ -192,8 +209,8 @@ export function createDraft(ctx, form) {
     initiatorName: ctx.user.name,
     department: ctx.user.dept,
     dateRequested: isoDate(ctx.now),
-    title: '', type: '', otherType: '', currentDoc: '', proposedDoc: '', supportingDocs: '',
-    description: '', currentState: '', proposedChange: '', justification: '',
+    title: '', type: '', otherType: '', currentDoc: '', proposedDoc: '', description: '',
+    changes: [{ sno: 1, current: '', proposed: '', justification: '' }], round: 1, regRounds: [],
     layoutPlan: false, sopNumber: '',
     attachments: [], assessments: [], reg: null, actions: [], actionSeq: 0,
     risk: null, closeout: null, extensions: [], amendments: [], consolidation: null,
@@ -203,7 +220,11 @@ export function createDraft(ctx, form) {
   log(r, ctx, 'Draft created', `Temporary ID ${r.draftId}`);
   return r;
 }
-const FORM_FIELDS = ['title', 'type', 'otherType', 'currentDoc', 'proposedDoc', 'supportingDocs', 'description', 'currentState', 'proposedChange', 'justification', 'layoutPlan', 'attachments'];
+const FORM_FIELDS = ['title', 'type', 'otherType', 'currentDoc', 'proposedDoc', 'description', 'changes', 'layoutPlan', 'attachments'];
+export function validateChanges(rows) {
+  if (!rows || !rows.length) fail('Add at least one change row (Current State, Proposed Change, Justification).');
+  rows.forEach((x, i) => { if (!x.current?.trim() || !x.proposed?.trim() || !x.justification?.trim()) fail(`Change row ${i + 1}: complete Current State, Proposed Change and Justification.`); });
+}
 const pickForm = (f) => Object.fromEntries(FORM_FIELDS.filter((k) => f[k] !== undefined).map((k) => [k, f[k]]));
 
 export function saveDraft(rec, ctx, form) {
@@ -221,14 +242,13 @@ export function submit(rec, ctx, form) {
   requireText(r.title, 'Title of the Change Control is required.');
   if (!r.type) fail('Select the Type of Change.');
   if (r.type === 'Other') requireText(r.otherType, 'Describe the type of change (Other).');
-  requireText(r.description, 'Change details and description are required.');
-  requireText(r.currentState, 'Current state is required.');
-  requireText(r.proposedChange, 'Proposed change is required.');
-  requireText(r.justification, 'Justification is required.');
+  validateChanges(r.changes);
+  r.changes = r.changes.map((x, i) => ({ ...x, sno: i + 1 }));
   const from = r.status;
-  const target = from === S.DRAFT ? S.PEND_ENDORSE : { 1: S.PEND_ENDORSE, 2: S.PEND_SCREEN, 6: S.QA_APPROVAL, 8: S.CLOSEOUT }[r.returnStage] || S.PEND_ENDORSE;
+  // A corrected, already-numbered CC returns to the initiator's HOD for re-endorsement; ALL HODs then reassess.
+  const target = from === S.DRAFT || !r.ccNumber ? S.PEND_ENDORSE : S.REENDORSE;
   r.status = target;
-  const toName = { [S.PEND_ENDORSE]: 'Department Head', [S.PEND_SCREEN]: 'QA', [S.QA_APPROVAL]: 'QA for final approval', [S.CLOSEOUT]: 'QA for closeout' }[target];
+  const toName = { [S.PEND_ENDORSE]: 'Department Head', [S.REENDORSE]: 'Department Head for re-endorsement (all HODs then reassess)' }[target];
   log(r, ctx, from === S.DRAFT ? 'Submitted to Department Head' : 'Corrected and resubmitted', `Routed to ${toName}`, 'Authorship and submission');
   r.returnNote = null;
   r.returnStage = null;
@@ -236,26 +256,45 @@ export function submit(rec, ctx, form) {
 }
 
 export function endorse(rec, ctx, { decision, comment }) {
-  if (!perms(rec, ctx).endorse) fail('Only the initiating Department Head can endorse this request.');
+  if (!perms(rec, ctx).endorse) fail("Only the initiator's HOD can endorse this request.");
   const r = clone(rec);
+  const re = r.status === S.REENDORSE;
   if (decision === 'endorse') {
-    r.status = S.PEND_SCREEN;
-    log(r, ctx, 'Endorsed by Department Head', (comment || '') + ' Endorsement does not authorize implementation.', 'Endorsement');
+    if (re) {
+      reopenForReassessment(r, ctx);
+      r.status = S.ASSESS;
+      log(r, ctx, 'Re-endorsed by HOD', (comment || '') + ` Review round ${r.round}: all designated HODs must reassess and sign again.`, 'Re-endorsement');
+    } else {
+      r.status = S.PEND_SCREEN;
+      log(r, ctx, 'Endorsed by HOD', (comment || '') + ' Endorsement does not authorize implementation.', 'Endorsement');
+    }
   } else if (decision === 'return') {
-    requireText(comment, 'A comment is required when returning for correction.');
-    r.status = S.RETURNED;
-    r.returnStage = 1;
-    r.returnNote = { by: ctx.user.name, comment, at: ctx.now.toISOString(), from: 'Department Head' };
-    log(r, ctx, 'Returned for correction by Department Head', comment);
+    requireText(comment, 'A reason is required when returning for correction.');
+    r.status = S.RETURNED; r.returnStage = 1;
+    r.returnNote = { by: ctx.user.name, comment, at: ctx.now.toISOString(), from: 'HOD' };
+    log(r, ctx, 'Returned for correction by HOD', comment);
   } else if (decision === 'reject') {
-    requireText(comment, 'Justification is mandatory when rejecting.');
-    r.status = S.REJECTED;
-    r.stoppedStage = 1;
-    log(r, ctx, 'Rejected by Department Head', comment, 'Rejection');
+    requireText(comment, 'A reason is mandatory when rejecting.');
+    r.status = S.REJECTED; r.stoppedStage = 1;
+    log(r, ctx, 'Rejected by HOD', comment, 'Rejection');
   } else fail('Choose Endorse, Return for Correction or Reject.');
   return r;
 }
-
+// Restart of the review: every assessment reopens as Pending with prior answers/actions prefilled; earlier rounds are preserved.
+function reopenForReassessment(r, ctx) {
+  const prev = r.round || 1;
+  r.round = prev + 1;
+  r.assessments.forEach((a) => {
+    (a.rounds ||= []).push({ round: prev, status: a.status, decision: a.decision, answers: a.answers, comments: a.comments, justification: a.justification, completedBy: a.completedBy, completedAt: a.completedAt, actions: r.actions.filter((x) => x.sourceKey === a.key).map((x) => `${x.id} ${x.description}`) });
+    a.status = 'Pending'; a.decision = null; a.completedBy = null; a.completedAt = null;
+  });
+  if (r.reg) {
+    (r.regRounds ||= []).push({ round: prev, applicable: r.reg.applicable, clientRequired: r.reg.clientRequired, regActionRequired: r.reg.regActionRequired, completedBy: r.reg.completedBy, completedAt: r.reg.completedAt });
+    r.reg = { ...r.reg, completedAt: null, completedBy: null };
+  }
+  r.consolidation = null;
+  log(r, ctx, `Review round ${r.round} started`, `All ${r.assessments.length} designated HODs are notified (My Tasks). Prior answers and action items are prefilled and editable; earlier rounds, signatures and history are preserved.`);
+}
 // ------------------------------------------------------------------ Stage 2: QA screening & CC number
 export function screen(rec, ctx, { decision, comment, remarks, checks }) {
   if (!perms(rec, ctx).screen) fail('Only QA (not the initiator) can screen this request.');
@@ -277,6 +316,7 @@ export function screen(rec, ctx, { decision, comment, remarks, checks }) {
       decision: null,
       justification: '',
       clarifications: [],
+      rounds: [],
       completedBy: null,
       completedAt: null,
     }));
@@ -312,7 +352,9 @@ export function assess(rec, ctx, key, p) {
     a.status = 'Clarification Requested';
     a.clarifications.push({ q: p.clarificationText, by: ctx.user.name, at: ctx.now.toISOString(), a: null, answeredAt: null });
     a.answers = p.answers || a.answers;
-    log(r, ctx, `${def.shortName}: clarification requested`, `${p.clarificationText} Only this assessment is paused; other assessments continue.${who}`);
+    r.status = S.CLARIFY;
+    r.clarification = { q: p.clarificationText, by: ctx.user.name, source: def.shortName, at: ctx.now.toISOString(), a: null, round: r.round || 1 };
+    log(r, ctx, `${def.shortName}: clarification / correction requested`, `${p.clarificationText} The CC returns to the initiator, then to the initiator's HOD for re-endorsement; then ALL designated HODs reassess.${who}`);
     return r;
   }
   if (!['accept', 'accept_action', 'reject'].includes(p.decision)) fail('Select a decision: Accept without Action, Accept with Action, Request Clarification or Not Acceptable.');
@@ -336,9 +378,11 @@ export function assess(rec, ctx, key, p) {
   }
   if (p.decision === 'accept_action') {
     if (!p.actions || p.actions.length === 0) fail('Accept with Action requires at least one action item.');
+    r.actions = r.actions.filter((x) => !(x.sourceKey === key && x.status === 'Planned'));
     p.actions.forEach((x) => newAction(r, ctx, { ...x, source: def.shortName, sourceKey: key }));
     a.status = 'Accepted with Action';
   } else {
+    r.actions = r.actions.filter((x) => !(x.sourceKey === key && x.status === 'Planned'));
     a.status = 'Accepted';
   }
   a.completedBy = ctx.user.name;
@@ -353,16 +397,16 @@ function advanceIfAssessed(r, ctx) {
     log(r, ctx, 'All departmental assessments completed', 'Change Control moved to Regulatory Assessment.');
   }
 }
-export function respondClarification(rec, ctx, key, text) {
-  if (!perms(rec, ctx).respondKeys.includes(key)) fail('No clarification is waiting for you on this assessment.');
+export function respondClarification(rec, ctx, { text, changes }) {
+  if (!perms(rec, ctx).respond) fail('No clarification / correction request is waiting for you.');
   requireText(text, 'Enter your response.');
   const r = clone(rec);
-  const a = r.assessments.find((x) => x.key === key);
-  const c = a.clarifications[a.clarifications.length - 1];
-  c.a = text;
-  c.answeredAt = ctx.now.toISOString();
-  a.status = 'Pending';
-  log(r, ctx, `${ASSESSMENT_BY_KEY[key].shortName}: clarification answered`, text);
+  if (changes) { validateChanges(changes); r.changes = changes.map((x, i) => ({ ...x, sno: i + 1 })); log(r, ctx, 'Change table corrected by initiator', `${r.changes.length} change row(s)`); }
+  r.clarification = { ...r.clarification, a: text, answeredAt: ctx.now.toISOString() };
+  const a = r.assessments.find((x) => x.status === 'Clarification Requested');
+  if (a) { const c = a.clarifications[a.clarifications.length - 1]; c.a = text; c.answeredAt = ctx.now.toISOString(); }
+  r.status = S.REENDORSE;
+  log(r, ctx, 'Initiator responded – sent to HOD for re-endorsement', text, 'Response to clarification');
   return r;
 }
 export function resolveNotAcceptable(rec, ctx, key, { outcome, note }) {
@@ -394,8 +438,9 @@ export function regulatory(rec, ctx, p) {
   const r = clone(rec);
   if (p.decision === 'clarify') {
     requireText(p.clarificationText, 'State what clarification you need.');
-    r.reg = { ...(r.reg || {}), clarification: { q: p.clarificationText, by: ctx.user.name, at: ctx.now.toISOString(), a: null } };
-    log(r, ctx, 'Regulatory Affairs: clarification requested', p.clarificationText);
+    r.status = S.CLARIFY;
+    r.clarification = { q: p.clarificationText, by: ctx.user.name, source: 'Regulatory Affairs', at: ctx.now.toISOString(), a: null, round: r.round || 1 };
+    log(r, ctx, 'Regulatory Affairs: clarification / correction requested', `${p.clarificationText} The CC returns to the initiator and, after re-endorsement, ALL HODs reassess.`);
     return r;
   }
   if (!p.andaStatus) fail('Select the ANDA/DMF Application Status.');
@@ -429,15 +474,6 @@ export function regulatory(rec, ctx, p) {
   };
   r.status = S.CONSOL;
   log(r, ctx, 'Regulatory assessment completed', `Regulatory action: ${p.regActionRequired ? 'Yes' : 'No'} · Client approval: ${p.clientRequired ? 'Yes – ' + p.clientName : 'No'}`, 'Regulatory review');
-  return r;
-}
-export function respondRegClarification(rec, ctx, text) {
-  if (!perms(rec, ctx).regRespond) fail('No regulatory clarification is waiting for you.');
-  requireText(text, 'Enter your response.');
-  const r = clone(rec);
-  r.reg.clarification.a = text;
-  r.reg.clarification.answeredAt = ctx.now.toISOString();
-  log(r, ctx, 'Regulatory clarification answered', text);
   return r;
 }
 export function uploadClientEvidence(rec, ctx, { fileName, reviewedBy, reviewDate, comment }) {
@@ -512,7 +548,7 @@ export function approvalBlockers(r, settings) {
   return b;
 }
 export function qaApprove(rec, ctx, p) {
-  if (!perms(rec, ctx).approve) fail('Only the Head of QA (not the initiator) can approve.');
+  if (!perms(rec, ctx).approve) fail('Only a QA Designee (not the initiator) can approve.');
   const r = clone(rec);
   if (p.decision === 'return') {
     requireText(p.comments, 'A comment is required when returning for correction.');
@@ -531,6 +567,7 @@ export function qaApprove(rec, ctx, p) {
     return r;
   }
   if (p.decision !== 'approve') fail('Choose Approve, Return for Correction or Reject.');
+  if (r.reg && !p.raReviewed) fail('Confirm that you have reviewed the RA / client-approval determination.');
   RISK_QUESTIONS.forEach((q) => {
     if (!p.answers?.[q.id]) fail(`Answer the risk question: "${q.label}"`);
   });
@@ -554,12 +591,16 @@ export function qaApprove(rec, ctx, p) {
 }
 
 // ------------------------------------------------------------------ Stage 7: implementation & action tracking
-export function updateAction(rec, ctx, actionId, { status, comment, evidenceName }) {
+export function updateAction(rec, ctx, actionId, { status, comment, evidenceName, evidenceNA }) {
   const a0 = rec.actions.find((a) => a.id === actionId);
   if (!a0 || !canWorkOnAction(rec, a0, ctx)) fail('Only the assigned owner can update this action, and only after QA approval.');
   const r = clone(rec);
   const a = r.actions.find((x) => x.id === actionId);
-  if (status === 'Completed') requireText(comment || a.comment, 'A completion comment is mandatory.');
+  if (status === 'Completed') {
+    requireText(comment || a.comment, 'A completion comment is mandatory.');
+    if (!(a.evidence.length || evidenceName || evidenceNA || a.evidenceNA)) fail('Upload the supporting evidence, or tick "No evidence applicable" (the completion comment then explains why).');
+  }
+  if (evidenceNA !== undefined) a.evidenceNA = !!evidenceNA;
   if (comment) a.comment = comment;
   if (evidenceName) {
     a.evidence.push(evidenceName);
@@ -575,12 +616,13 @@ export function updateAction(rec, ctx, actionId, { status, comment, evidenceName
   return r;
 }
 export function returnAction(rec, ctx, actionId, reason) {
-  if (!perms(rec, ctx).isInitiator || rec.status !== S.IMPL) fail('Only the initiator can return an action.');
+  if (!perms(rec, ctx).isInitiator || !(rec.status === S.IMPL || (rec.status === S.RETURNED && rec.returnStage === 8))) fail('Only the initiator can return an action (during implementation or after QA returned the closeout).');
   requireText(reason, 'Explain what is incomplete.');
   const r = clone(rec);
   const a = r.actions.find((x) => x.id === actionId);
   a.status = 'In Progress';
   a.returned = reason;
+  a.flagged = null;
   log(r, ctx, `Action ${a.id}: returned to owner`, reason);
   return r;
 }
@@ -595,55 +637,65 @@ export function verify(rec, ctx, { sopNumber }) {
   return r;
 }
 
-// ---- extension (SOP 5.11) ----
-export function requestExtension(rec, ctx, { reason }) {
+// ---- extension (Carnegie feedback section 4) ----
+export const approvedExtensions = (r) => r.extensions.filter((e) => e.status === 'Approved').length;
+export function requestExtension(rec, ctx, { days, reason }) {
   if (!perms(rec, ctx).requestExtension) fail('Only the initiator can request an extension while implementation is in progress.');
-  requireText(reason, 'A written reason/justification for the extra time is required.');
-  if (rec.extensions.some((e) => ['Pending'].includes(e.status))) fail('An extension request is already pending.');
-  const level = rec.extensions.filter((e) => e.status === 'Approved').length + 1;
-  const lv = EXTENSION_LEVELS[level - 1];
-  if (!lv) fail('The maximum number of extensions has been reached.');
-  const deadline = addBusinessDays(ctx.now, 1);
-  if (new Date(rec.dueDate + 'T23:59:59Z') < deadline) fail('Extension requests must be submitted at least one business day before the due date.');
+  const n = Number(days);
+  if (!n || n < 1) fail('Enter the additional days requested.');
+  requireText(reason, 'A written reason for the additional time is required.');
+  if (rec.extensions.some((e) => e.status === 'Pending')) fail('An extension request is already in approval.');
+  const level = approvedExtensions(rec) + 1;
+  if (level > MAX_EXTENSIONS) fail('A fifth extension is an open decision that needs separate QA/Management confirmation. Please contact QA.');
   const r = clone(rec);
-  r.extensions.push({
-    id: `EXT-${r.extensions.length + 1}`, level, days: lv.days, reason, requestedBy: ctx.user.name, requestedAt: ctx.now.toISOString(),
-    status: 'Pending', step: 0, chain: lv.chain.map((c) => ({ ...c, done: false })), decisions: [],
-  });
-  log(r, ctx, `Extension requested – ${lv.label}`, reason, 'Extension request');
+  r.extensions.push({ id: `EXT-${r.extensions.length + 1}`, level, days: n, reason, requestedBy: ctx.user.name, requestedAt: ctx.now.toISOString(), status: 'Pending', step: 0, chain: extensionChain(level).map((c) => ({ ...c, done: false })), decisions: [], dueBefore: r.dueDate });
+  log(r, ctx, `Extension requested – extension no. ${level} (+${n} days)`, reason, 'Extension request');
   return r;
 }
 export function extensionActor(rec, ext, ctx) {
   if (ext.status !== 'Pending') return false;
   const step = ext.chain[ext.step];
-  if (!step) return false;
-  if (step.role === 'dept_head') return ctx.eff.includes(DEPT_HEAD[rec.department]);
-  return hasRole(ctx, step.role) && !ctx.eff.includes(rec.initiatorId);
+  if (!step || ctx.eff.includes(rec.initiatorId)) return false;
+  if (step.role === 'initiator_hod') return ctx.eff.includes(DEPT_HEAD[rec.department]);
+  if (step.role === 'qad_hod') return ctx.effUsers.some(isQadHod);
+  if (step.role === 'ceo') return hasRole(ctx, 'ceo');
+  return false;
 }
+// decision: 'approve' | 'forward' (QAD HOD -> CEO, optional for extensions 1–3) | 'return' | 'reject'
 export function decideExtension(rec, ctx, extId, { decision, comment }) {
   const ext0 = rec.extensions.find((e) => e.id === extId);
   if (!ext0 || !extensionActor(rec, ext0, ctx)) fail('This extension step is not assigned to you.');
   const r = clone(rec);
   const ext = r.extensions.find((e) => e.id === extId);
   const step = ext.chain[ext.step];
-  if (decision === 'reject') {
-    requireText(comment, 'A reason is required when rejecting.');
-    ext.status = 'Rejected';
-    ext.decisions.push({ by: ctx.user.name, label: step.label, type: step.type, decision: 'Rejected', comment, at: ctx.now.toISOString() });
-    log(r, ctx, `Extension ${ext.id} rejected (${step.label})`, comment, 'Extension decision');
+  const rec1 = (d) => ext.decisions.push({ by: ctx.user.name, label: step.label, decision: d, comment: comment || '', at: ctx.now.toISOString() });
+  if (decision === 'reject' || decision === 'return') {
+    requireText(comment, 'A reason is required to reject or return for correction.');
+    ext.status = decision === 'reject' ? 'Rejected' : 'Returned for correction';
+    rec1(ext.status);
+    log(r, ctx, `Extension ${ext.id} ${ext.status.toLowerCase()} (${step.label})`, comment, 'Extension decision');
     return r;
   }
+  let finalise = false;
+  if (decision === 'forward') {
+    if (step.kind !== 'final_or_forward') fail('Only the QAD HOD can optionally forward an extension (1st–3rd) to the CEO.');
+    ext.chain.push({ role: 'ceo', label: 'CEO (forwarded by QAD HOD)', kind: 'final', done: false });
+  } else if (decision === 'approve') {
+    if (step.kind === 'final_or_forward' || step.kind === 'final') finalise = true;
+  } else fail('Choose Approve, Forward to CEO, Return for correction or Reject.');
   step.done = true;
-  ext.decisions.push({ by: ctx.user.name, label: step.label, type: step.type, decision: step.type === 'review' ? 'Reviewed' : 'Approved', comment: comment || '', at: ctx.now.toISOString() });
-  if (ext.step + 1 >= ext.chain.length) {
-    ext.status = 'Approved';
+  rec1(finalise ? 'Approved (final)' : decision === 'forward' ? 'Forwarded to CEO' : 'Approved – passed to next approver');
+  if (finalise) {
+    ext.status = 'Approved'; ext.approvedAt = ctx.now.toISOString();
     const prev = r.dueDate;
     r.dueDate = isoDate(addDays(prev, ext.days));
-    r.dueHistory.push({ date: r.dueDate, at: ctx.now.toISOString(), reason: `${ext.id} approved (+${ext.days} days)` });
-    log(r, ctx, `Extension ${ext.id} approved – due date ${prev} → ${r.dueDate}`, comment || '', 'Extension approval');
+    r.dueHistory.push({ date: r.dueDate, at: ctx.now.toISOString(), reason: `Extension ${ext.level} approved (+${ext.days} days)` });
+    const moved = [];
+    r.actions.filter((a) => !['Completed', 'Cancelled'].includes(a.status) && a.due).forEach((a) => { a.originalDue = a.originalDue || a.due; a.due = isoDate(addDays(a.due, ext.days)); moved.push(a.id); });
+    log(r, ctx, `Extension ${ext.id} fully approved – due date ${prev} → ${r.dueDate}`, `${comment || ''} Pending action deadlines moved (+${ext.days} days): ${moved.join(', ') || 'none'}. Original dates and completed actions retained.`, 'Extension approval');
   } else {
     ext.step += 1;
-    log(r, ctx, `Extension ${ext.id}: ${step.type === 'review' ? 'reviewed' : 'approved'} by ${step.label}`, `Next: ${ext.chain[ext.step].label}`, 'Extension review');
+    log(r, ctx, `Extension ${ext.id}: ${decision === 'forward' ? 'forwarded to CEO' : 'approved'} by ${step.label}`, `${comment || ''} Next: ${ext.chain[ext.step].label}`, 'Extension review');
   }
   return r;
 }
@@ -683,15 +735,44 @@ export function decideAmendment(rec, ctx, amdId, { decision, comment }) {
   return r;
 }
 
+// ------------------------------------------------------------------ documents (multiple uploads, version history retained)
+const docKey = (n) => n.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[ _-]*v?\d+(\.\d+)*$/i, '').trim();
+const stageLabel = (r) => ({ [S.DRAFT]: 'Initiation', [S.RETURNED]: 'Initiation', [S.PEND_ENDORSE]: 'Endorsement', [S.REENDORSE]: 'Endorsement', [S.PEND_SCREEN]: 'QA screening', [S.ASSESS]: 'Departmental assessment', [S.CLARIFY]: 'Clarification', [S.REG]: 'Regulatory', [S.CONSOL]: 'Consolidation', [S.QA_APPROVAL]: 'QA approval', [S.IMPL]: 'Implementation', [S.CLOSEOUT]: 'Closeout', [S.CLOSED]: 'Closed' }[r.status] || r.status);
+export const ATT_KINDS = ['Supporting document', 'Review attachment', 'Client approval', 'Action evidence', 'Final signed document'];
+export function addAttachment(rec, ctx, { name, kind = 'Supporting document', replaceId }) {
+  if (!canAttach(rec, ctx)) fail('You cannot upload documents to this Change Control.');
+  requireText(name, 'Choose a file.');
+  if (kind === 'Final signed document' && ![S.IMPL, S.CLOSEOUT, S.RETURNED].includes(rec.status)) fail('Final signed documents are added during implementation or closeout.');
+  const r = clone(rec);
+  const base = replaceId ? r.attachments.find((x) => x.id === replaceId) : null;
+  const key = base ? base.docKey || docKey(base.name) : docKey(name);
+  const prior = r.attachments.filter((x) => (x.docKey || docKey(x.name)) === key);
+  const version = prior.length ? Math.max(...prior.map((x) => x.version || 1)) + 1 : 1;
+  prior.forEach((x) => { x.superseded = true; });
+  r.attachments.push({ id: uid('att'), docKey: key, name, kind, version, by: ctx.user.name, at: ctx.now.toISOString(), stage: stageLabel(r), superseded: false });
+  log(r, ctx, version > 1 ? 'New document version uploaded' : 'Document uploaded', `${name} · v${version} · ${kind} (previous versions retained)`);
+  return r;
+}
+export function resubmitCloseout(rec, ctx) {
+  if (!perms(rec, ctx).resubmitCloseout) fail('Only the initiator can resubmit a closeout that QA returned.');
+  const open = rec.actions.filter((a) => !['Completed', 'Cancelled'].includes(a.status));
+  if (open.length) fail(`Action item(s) still open: ${open.map((a) => a.id).join(', ')}. Return them to their owners and wait until they are completed.`);
+  const r = clone(rec);
+  r.actions.forEach((a) => { a.flagged = null; });
+  r.status = S.CLOSEOUT; r.returnNote = null; r.returnStage = null;
+  log(r, ctx, 'Corrections completed – resubmitted for QA closeout (same CC number)', 'All action items are completed with their evidence.', 'Implementation re-verified');
+  return r;
+}
+
 // ------------------------------------------------------------------ Stage 8: QA closeout
 export function closeoutChecks(r) {
   const acts = r.actions.filter((a) => a.status !== 'Cancelled');
   const done = acts.filter((a) => a.status === 'Completed');
-  const evid = r.attachments.filter((a) => a.kind === 'Action evidence' || a.kind === 'Client approval').length;
+  const noEvid = acts.filter((a) => !(a.evidence.length || a.evidenceNA));
   const trainingOk = acts.filter((a) => a.source === 'Training').every((a) => a.status === 'Completed');
   return [
     { label: 'All required action items are completed', ok: done.length === acts.length, detail: `${done.length} of ${acts.length} completed` },
-    { label: 'Supporting evidence is attached', ok: evid > 0 || acts.length === 0, detail: `${evid} evidence file(s) on record` },
+    { label: 'Supporting evidence is attached', ok: noEvid.length === 0, detail: noEvid.length ? `Missing for: ${noEvid.map((a) => a.id).join(', ')}` : 'Every action has evidence (or is marked not applicable)', missing: noEvid.map((a) => a.id) },
     { label: 'Required technical documentation is approved', ok: r.type !== 'SOP' || !!r.sopNumber, detail: r.type === 'SOP' ? (r.sopNumber ? `Approved SOP: ${r.sopNumber}` : 'Approved SOP number missing') : 'Verified by initiator on submission' },
     { label: 'Applicable training is completed', ok: trainingOk, detail: trainingOk ? 'No open training actions' : 'Training actions still open' },
     { label: 'Regulatory and client requirements are satisfied', ok: !!r.reg && (!r.reg.clientRequired || !!r.reg.clientEvidence), detail: r.reg?.clientRequired ? (r.reg.clientEvidence ? 'Signed client approval on file' : 'Client approval evidence missing') : 'No client approval required' },
@@ -711,7 +792,7 @@ export function suggestCloseout(r) {
 export function closeout(rec, ctx, p) {
   const pm = perms(rec, ctx);
   if (p.decision === 'cancel') {
-    if (!pm.cancel) fail('Only the Head of QAD (or designee) can cancel/void a Change Control.');
+    if (!pm.cancel) fail('Only a QA Designee can cancel/void a Change Control (rule pending QA/Management confirmation).');
     requireText(p.cancelReason, 'Document the justification for cancelling.');
     const r = clone(rec);
     r.status = S.CANCELLED;
@@ -727,7 +808,8 @@ export function closeout(rec, ctx, p) {
     r.status = S.RETURNED;
     r.returnStage = 8;
     r.returnNote = { by: ctx.user.name, comment: p.comment, at: ctx.now.toISOString(), from: 'QA Closeout' };
-    log(r, ctx, 'Closeout returned for correction', `${p.comment} (same CC number retained)`);
+    (p.flagActions || []).forEach((id) => { const a = r.actions.find((x) => x.id === id); if (a) a.flagged = p.comment; });
+    log(r, ctx, 'Closeout returned for correction', `${p.comment} (same CC number retained)${p.flagActions?.length ? ' · flagged: ' + p.flagActions.join(', ') : ''}`);
     return r;
   }
   if (p.decision !== 'close') fail('Choose Close, Return for Correction or Cancel / Void.');
@@ -749,27 +831,26 @@ export function closeout(rec, ctx, p) {
 export function tasksFor(records, ctx) {
   const out = [];
   records.forEach((r) => {
+    if (!canViewRecord(r, ctx.user)) return;
     const p = perms(r, ctx);
-    const add = (title, detail, urgency) => out.push({ rec: r, title, detail: detail || '', urgency: urgency || 'normal' });
-    if (p.edit) add(r.status === S.RETURNED ? 'Correct and resubmit' : 'Complete and submit draft', r.returnNote?.comment);
-    if (p.endorse) add('Endorse, return or reject', 'Department Head endorsement');
-    if (p.screen) add('Screen request and issue CC number', 'QA screening');
-    p.assessKeys.forEach((k) => add(`Complete ${ASSESSMENT_BY_KEY[k].shortName} assessment`, 'Departmental assessment'));
-    p.respondKeys.forEach((k) => add(`Answer clarification – ${ASSESSMENT_BY_KEY[k].shortName}`, r.assessments.find((a) => a.key === k).clarifications.slice(-1)[0]?.q));
-    p.resolveKeys.forEach((k) => add(`Resolve Not Acceptable – ${ASSESSMENT_BY_KEY[k].shortName}`, r.assessments.find((a) => a.key === k).justification));
-    if (p.regulatory) add('Complete regulatory assessment', 'Regulatory Affairs');
-    if (p.regRespond) add('Answer regulatory clarification', r.reg.clarification.q);
-    if (p.consolidate) add('Review consolidated action list', 'Impact consolidation');
-    if (p.approve) add('Risk assessment and final approval', 'QA approval');
-    if (p.closeout) add('Closeout verification', 'QA closeout');
-    if (p.verify) add('Verify implementation and submit to QA', 'All actions completed');
+    const add = (kind, title, detail, o = {}) => out.push({ rec: r, kind, title, detail: detail || '', urgency: o.urgency || 'normal', tab: o.tab || 'overview', actionId: o.actionId || null, due: o.due || null });
+    if (p.edit) add('Correction', r.status === S.RETURNED ? 'Correct and resubmit' : 'Complete and submit draft', r.returnNote?.comment);
+    if (p.respond) add('Clarification', 'Respond to clarification / correction request', r.clarification?.q);
+    if (p.endorse) add('Endorsement', r.status === S.REENDORSE ? 'Re-endorse the corrected request' : 'Endorse, return or reject', r.status === S.REENDORSE ? 'After re-endorsement ALL HODs reassess' : 'HOD endorsement');
+    if (p.screen) add('QA decision', 'Screen request and issue CC number', 'QA screening');
+    p.assessKeys.forEach((k) => add('Assessment', `Complete ${ASSESSMENT_BY_KEY[k].shortName}${/assessment$/i.test(ASSESSMENT_BY_KEY[k].shortName) ? '' : ' assessment'}`, (r.round || 1) > 1 ? `Review round ${r.round} – reassess (answers prefilled)` : 'Departmental assessment'));
+    p.resolveKeys.forEach((k) => add('QA decision', `Resolve Not Acceptable – ${ASSESSMENT_BY_KEY[k].shortName}`, r.assessments.find((a) => a.key === k).justification));
+    if (p.regulatory) add('RA review', 'Complete regulatory / client-approval assessment', (r.round || 1) > 1 ? `Review round ${r.round}` : 'Regulatory Affairs');
+    if (p.consolidate) add('Review', 'Review consolidated action list', 'Impact consolidation');
+    if (p.approve) add('QA decision', 'Risk assessment and final QA approval', 'QA approval');
+    if (p.closeout) add('QA decision', 'Closeout verification (Section X)', 'QA closeout');
+    if (p.verify) add('Verification', 'Verify completed actions and submit to QA', 'All actions completed', { tab: 'actions' });
+    if (p.resubmitCloseout) add('Correction', 'Correct flagged actions and resubmit to QA closeout', r.returnNote?.comment, { tab: 'actions' });
     r.actions.forEach((a) => {
-      if (canWorkOnAction(r, a, ctx) && a.status !== 'Completed') add(`${a.id} · ${a.description}`, `Action item · due ${a.due || 'TBD'}`, isOverdue(a, ctx.now) ? 'overdue' : 'normal');
+      if (canWorkOnAction(r, a, ctx) && a.status !== 'Completed') add('Action item', `${a.id} · ${a.description}`, `Due ${a.due || 'TBD'}${a.flagged ? ' · flagged by QA' : ''}`, { tab: 'actions', actionId: a.id, due: a.due, urgency: isOverdue(a, ctx.now) ? 'overdue' : 'normal' });
     });
-    r.extensions.forEach((e) => {
-      if (extensionActor(r, e, ctx)) add(`Extension ${e.id}: ${e.chain[e.step].type === 'review' ? 'review' : 'approve'}`, e.reason);
-    });
-    if (p.decideAmendment) r.amendments.filter((a) => a.status === 'Pending').forEach((a) => add(`Amendment ${a.id}: authorize or decline`, a.description));
+    r.extensions.forEach((e) => { if (extensionActor(r, e, ctx)) add('Extension approval', `Extension ${e.level}: decide (${e.chain[e.step].label})`, `+${e.days} days · ${e.reason}`); });
+    if (p.decideAmendment) r.amendments.filter((a) => a.status === 'Pending').forEach((a) => add('QA decision', `Amendment ${a.id}: authorize or decline`, a.description));
   });
   return out;
 }
@@ -782,11 +863,13 @@ export function waitingOn(r) {
     case S.PEND_SCREEN: return 'QA Designee (screening)';
     case S.ASSESS: {
       const pend = r.assessments.filter((a) => !['Accepted', 'Accepted with Action'].includes(a.status));
-      return `${pend.length} assessment(s) open: ${pend.map((a) => ASSESSMENT_BY_KEY[a.key].shortName).join(', ')}`;
+      return `Round ${r.round || 1}: ${pend.length} assessment(s) open: ${pend.map((a) => ASSESSMENT_BY_KEY[a.key].shortName).join(', ')}`;
     }
-    case S.REG: return r.reg?.clarification && !r.reg.clarification.a ? 'Initiator – regulatory clarification' : 'Regulatory Affairs';
+    case S.CLARIFY: return `Initiator – respond to ${r.clarification?.source || 'HOD'} clarification`;
+    case S.REENDORSE: return `HOD – ${deptHead(r)?.name} (re-endorsement)`;
+    case S.REG: return 'Regulatory Affairs (RA Designee)';
     case S.CONSOL: return 'Initiator (consolidation review)';
-    case S.QA_APPROVAL: return 'Head of QA (final approval)';
+    case S.QA_APPROVAL: return 'QA Designee (final approval)';
     case S.IMPL: {
       const open = r.actions.filter((a) => !['Completed', 'Cancelled'].includes(a.status));
       return open.length ? `${open.length} action item(s) open` : 'Initiator – verification';

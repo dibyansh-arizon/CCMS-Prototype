@@ -30,9 +30,9 @@ export const ASSESSMENTS = [
     key: 'validation',
     name: 'Validation / Qualification Assessment',
     shortName: 'Validation / Qualification',
-    completedBy: 'Head of Operations Department / Designee',
+    completedBy: 'HOD of Operations / Designee',
     department: 'Operations',
-    roles: ['ops_head'],
+    heads: ['u_rajesh'],
     sop: 'SOP 5.5.1.1',
     fields: [
       { id: 'process', type: 'yna', label: 'Process Validation Required?' },
@@ -44,9 +44,9 @@ export const ASSESSMENTS = [
     key: 'analytical',
     name: 'Analytical Validation / Qualification Assessment',
     shortName: 'Analytical Validation / Qualification',
-    completedBy: 'Head of ARD or QCS / Designee',
+    completedBy: 'HOD of ARD or QCS / Designee (either one signs)',
     department: 'ARD / QCS',
-    roles: ['ard_head', 'qcs_head'],
+    heads: ['u_saurabh', 'u_meenal'],
     sop: 'SOP 5.5.1.2',
     fields: [
       { id: 'method', type: 'yna', label: 'Method Validation Required?' },
@@ -57,9 +57,9 @@ export const ASSESSMENTS = [
     key: 'stability',
     name: 'Stability Assessment',
     shortName: 'Stability',
-    completedBy: 'Head of ARD or QCS / Designee',
+    completedBy: 'HOD of ARD or QCS / Designee (either one signs)',
     department: 'ARD / QCS',
-    roles: ['ard_head', 'qcs_head'],
+    heads: ['u_saurabh', 'u_meenal'],
     sop: 'SOP 5.5.1.3',
     fields: [
       { id: 'required', type: 'yn', label: 'Stability required?' },
@@ -82,9 +82,9 @@ export const ASSESSMENTS = [
     key: 'computer',
     name: 'Computer System Assessment',
     shortName: 'Computer System',
-    completedBy: 'Head of ITR Department / Designee',
+    completedBy: 'HOD of ITR / Designee',
     department: 'Information Technology (ITR)',
-    roles: ['itr_head'],
+    heads: ['u_vivek'],
     sop: 'SOP 5.5.1.4',
     fields: [{ id: 'validation', type: 'yna', label: 'Validation/Qualification Required?' }],
   },
@@ -92,9 +92,9 @@ export const ASSESSMENTS = [
     key: 'safety',
     name: 'Safety Risk Assessment',
     shortName: 'Safety Risk',
-    completedBy: 'Head of EHS Department / Designee',
+    completedBy: 'HOD of EHS / Designee',
     department: 'EHS',
-    roles: ['ehs_head'],
+    heads: ['u_kavita'],
     sop: 'SOP 5.5.1.5',
     fields: [
       { id: 'operator', type: 'yna', label: 'Is there an impact on operator safety?' },
@@ -105,9 +105,9 @@ export const ASSESSMENTS = [
     key: 'training',
     name: 'Training Assessment',
     shortName: 'Training',
-    completedBy: "Head of the Initiator's Department / Designee",
+    completedBy: "HOD of the Initiator's Department / Designee",
     department: "Initiator's Department",
-    roles: [], // resolved at runtime: head of the initiating department
+    heads: [], // resolved at runtime: HOD of the initiating department
     sop: 'SOP 5.5.1.6',
     fields: [
       {
@@ -131,9 +131,9 @@ export const ASSESSMENTS = [
     key: 'qad',
     name: 'QAD Assessment',
     shortName: 'QAD Assessment',
-    completedBy: 'Head of QAD / Designee',
+    completedBy: 'QAD HOD / Designee',
     department: 'Quality Assurance (QAD)',
-    roles: ['qa_head'],
+    heads: ['u_neha'],
     sop: 'SOP 5.5.1.7',
     fields: [
       { id: 'stabilityProtocol', type: 'yna', label: 'Is there an impact on the Stability Protocol?' },
@@ -149,7 +149,7 @@ export const ASSESSMENT_BY_KEY = Object.fromEntries(ASSESSMENTS.map((a) => [a.ke
 export const DECISIONS = [
   { id: 'accept', label: 'Accept without Action', hint: 'No additional action required.' },
   { id: 'accept_action', label: 'Accept with Action', hint: 'Identify action items, owners and due dates/durations.' },
-  { id: 'clarify', label: 'Request Clarification', hint: 'Returns only this assessment to the initiator.' },
+  { id: 'clarify', label: 'Request Clarification / Correction', hint: 'Returns the CC to the initiator; after re-endorsement ALL HODs reassess.' },
   { id: 'reject', label: 'Not Acceptable', hint: 'Justification required; QA resolves.' },
 ];
 
@@ -200,40 +200,23 @@ export const FINAL_DISPOSITION = [
   'Change Request canceled – no action is taken',
 ];
 
-// ---- Extensions (SOP 5.11): level drives duration and review/approval chain ----
-export const EXTENSION_LEVELS = [
-  { level: 1, days: 60, label: '1st extension – 60 days', chain: [{ role: 'qa_designee', type: 'approve', label: 'QAD Designee' }] },
-  {
-    level: 2,
-    days: 90,
-    label: '2nd extension – 90 days',
-    chain: [
-      { role: 'qa_designee', type: 'review', label: 'QAD Designee' },
-      { role: 'dept_head', type: 'approve', label: "Head of Initiator's Department" },
-    ],
-  },
-  {
-    level: 3,
-    days: 120,
-    label: '3rd extension – 120 days',
-    chain: [
-      { role: 'qa_designee', type: 'review', label: 'QAD Designee' },
-      { role: 'dept_head', type: 'review', label: "Head of Initiator's Department" },
-      { role: 'qa_head', type: 'approve', label: 'Head of QAD' },
-    ],
-  },
-  {
-    level: 4,
-    days: 180,
-    label: '4th extension – 180 days',
-    chain: [
-      { role: 'qa_designee', type: 'review', label: 'QAD Designee' },
-      { role: 'dept_head', type: 'review', label: "Head of Initiator's Department" },
-      { role: 'qa_head', type: 'review', label: 'Head of QAD' },
-      { role: 'management', type: 'approve', label: 'Management' },
-    ],
-  },
+// ---- Extension rules (Carnegie feedback section 4): requested additional DAYS, sequential approval.
+// 1st–3rd: Initiator's HOD > QAD HOD (QAD HOD may optionally forward ANY request to the CEO for final approval)
+// 4th:     Initiator's HOD > QAD HOD > CEO (mandatory).  A fifth extension is an open decision (not assumed).
+export const MAX_EXTENSIONS = 4;
+export function extensionChain(level) {
+  const chain = [{ role: 'initiator_hod', label: "Initiator's HOD", kind: 'step' }, { role: 'qad_hod', label: 'QAD HOD', kind: level >= 4 ? 'forward_only' : 'final_or_forward' }];
+  if (level >= 4) chain.push({ role: 'ceo', label: 'CEO (mandatory)', kind: 'final' });
+  return chain;
+}
+// ---- Items tracked as OPEN decisions (Carnegie feedback section 5) – not assumed approved
+export const OPEN_DECISIONS = [
+  { id: 'OD-1', title: 'Client / regulatory approval gates', detail: 'Exact timing gates for client and regulatory approval are not confirmed.', behaviour: 'The RA determination is recorded and the related action goes into the common list. No blanket client-evidence blocker at QA approval (Administration > Settings can enable one for demonstration).' },
+  { id: 'OD-2', title: 'Amendment and cancellation after QA approval', detail: 'Rules after QA approval, especially after partial implementation, are not confirmed.', behaviour: 'The initiator can request an amendment and a QA Designee decides it; a QA Designee can cancel with a documented reason. Both are shown as “pending QA/Management confirmation”.' },
+  { id: 'OD-3', title: 'Controlled-document / training evidence and retention (Part 11)', detail: 'Evidence requirements for controlled documents and training, and system retention / Part 11 controls, are not confirmed.', behaviour: 'Each action needs evidence or a “not applicable” statement; document versions are retained. Retention and Part 11 controls are not modelled.' },
+  { id: 'OD-4', title: 'Fifth extension', detail: 'Treatment of any fifth extension is not confirmed.', behaviour: 'A fifth request is blocked with a message to contact QA; no routing is assumed.' },
 ];
+export const VERSION = { number: '2.1', label: 'CCMS Prototype v2.1', source: 'Carnegie “CCMS Prototype: Consolidated Feedback and Requirements” (Feedback_on_UI.docx)', base: 'CCMS Prototype v2.0 (Master Workflow + SOP QAD003.04)' };
 
 // ---- Master Workflow stages (the tracker shown on every Change Control) ----
 export const STAGES = [
@@ -255,6 +238,8 @@ export const STATUS = {
   REG: 'Regulatory Assessment',
   CONSOL: 'Pending Initiator Consolidation',
   QA_APPROVAL: 'Pending QA Approval',
+  CLARIFY: 'Clarification Requested',
+  REENDORSE: 'Pending HOD Re-endorsement',
   IMPL: 'Implementation in Progress',
   CLOSEOUT: 'Pending QA Closeout',
   CLOSED: 'Closed',

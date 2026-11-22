@@ -1,94 +1,56 @@
-# Carnegie Pharma – Change Control Management System (CCMS) Prototype v2.0
+# Carnegie Pharma – Change Control Management System (CCMS) Prototype
 
-A clickable, role-based prototype that demonstrates the **Carnegie Master Workflow** (8 stages) end to end.
-It digitizes the process – it does not reproduce the paper form. **QAD003.04** is used only for what the
-Master Workflow does not define (the exact department questions, extension chain, SOP-change gate, etc.).
+| | |
+|---|---|
+| **Version** | **v2.1** (update of CCMS Prototype v2.0) |
+| **Source document** | Carnegie “CCMS Prototype: Consolidated Feedback and Requirements” – `docs/Feedback_on_UI.docx` |
+| **Procedure basis** | Carnegie Master Workflow (8 stages) + SOP QAD003.04 (used where the Master Workflow is silent) |
 
-> Demonstration software. Not validated; not for GMP records. Data is stored locally.
+> Demonstration software – not validated, not for GMP records. Data is stored locally (`data/ccms-db.json` under `npm run dev`, otherwise browser storage).
 
-## Run it
-
+## Run
 ```bash
 npm install
-npm run dev        # http://localhost:5173  (state is saved to data/ccms-db.json)
-npm run build      # production build -> dist/
-npm test           # 45 workflow-engine checks (Master Workflow rules)
+npm run dev      # http://localhost:5173
+npm run build    # production build in dist/
+npm test         # 31 workflow-engine checks
 ```
-Requires Node 18+. Sign in by choosing a persona; switch role any time from the user menu (top right).
-**Administration → Reset demo data** restores the starting scenario.
+Node 18+. Sign in as any user; switch user/role from the top-right menu. Administration → Settings → *Reset demo data* restores the starting scenario (sign in as Rohit Sinha).
 
-## Source precedence (as agreed)
-1. **Master Workflow** decides who does what, in which stage, with which decisions.
-2. **QAD003.04** fills the gaps: exact questions/checklists, extension rules, SOP-change gate, cancellation authority.
-3. Anything in neither document is shown as a configurable setting or listed under *Assumptions*.
-
-## Master Workflow → screens
-| Stage | Role | What the prototype shows |
-|---|---|---|
-| 1 Initiation & Endorsement | Initiator, Department Head | Create form (change details, current state, proposed change, justification, attachments), temporary Draft ID; Dept Head: Endorse / Return / Reject (endorsement ≠ authorization) |
-| 2 QA Screening | QA Designee | Completeness / justification / duplicate check; Accept issues official **CCYYNNN** number and Logbook entry; Return / Reject |
-| 3 Departmental Assessment | 7 assessing heads | Sent **in parallel** to all designated heads incl. initiating head. Four outcomes: Accept without Action, Accept with Action (owners + due dates/durations), Request Clarification (only that assessment pauses), Not Acceptable (QA resolves). ARD **or** QCS head may do Analytical & Stability |
-| 4 Regulatory & Client | Regulatory Affairs, assigned employee | Regulatory action? Client approval? Actions; employee uploads signed client evidence |
-| 5 Consolidation | Initiator | Auto-merged action list with source; Accept / Add actions / Return for correction |
-| 6 QA Approval | Head of QA | Full-package review, risk assessment, mitigation actions, due date (default 60 days, never earlier than latest action), Approve (e-signature) / Return / Reject. Actions unlock only now |
-| 7 Implementation | Action owners, Initiator | Not Started / In Progress / Completed, mandatory completion comment, evidence upload; initiator verifies or returns an action; extension & amendment requests |
-| 8 QA Closeout | QA Designee / Head of QA | Auto-verification list, closeout questions, Close (e-signature) / Return (same CC number) / Cancel-Void (Head of QA). Closed record is read-only and archived |
-
-## Department checklists (exact QAD questions, department-restricted)
-Each head sees **only their own checklist** while assessments run (e.g. the Head of QA sees only the QAD Assessment).
-Other departments' answers stay hidden until assessments close; auditors see everything.
-
-| Assessment | Completed by | Questions (verbatim from the QAD form) |
-|---|---|---|
-| Validation/Qualification | Head of Operations | Process Validation Required? · Cleaning Validation Required? · Equipment Qualification/Calibration Required? (Yes/No/Not Applicable) |
-| Analytical Validation/Qualification | Head of ARD or QCS | Method Validation Required? · Equipment Qualification/Calibration Required? |
-| Stability | Head of ARD or QCS | Stability required? (Yes/No) → Accelerated (40°C ± 2°C/75% RH ± 5% RH) · Long-term (25°C ± 2°C/60% RH ± 5% RH) · Refrigerated (5°C ± 3°C) · Other |
-| Computer System | Head of ITR | Validation/Qualification Required? |
-| Safety Risk | Head of EHS | Is there an impact on operator safety? · …on environmental safety? |
-| Training | Head of the **initiator's** department | Departments affected (QAD, OPS, ARD, PRD, EHS, ITR, RAC, QCS, All, Other) · Type of Training |
-| QAD Assessment | Head of QAD | Impact on the Stability Protocol? · …Vendor Qualification? · …Quality Agreement? |
-
-Also verbatim: Section V reporting criteria and ANDA/DMF status, Section VIII risk questions (1a–1d, 2a), Section X closeout questions (1–8 incl. 4b).
-All of it lives in one file: `src/data/forms.js`.
-
-## Demo scenarios (pre-loaded, generated by the real engine)
-| Sign in as | Try this |
+## What changed in v2.1 (mapped to the Carnegie feedback)
+| Feedback point | Implemented |
 |---|---|
-| Ananya Sharma (Initiator) | Answer the clarification on CC26007; create and submit a new request; consolidate… |
-| Vikram Rao / **Arjun Nair** | Endorse the pending request; Arjun acts through an active delegation |
-| Priya Nair (QA Designee) | Screen a request and issue the CC number; authorize the amendment on the vision-camera change |
-| Dr. Saurabh Joshi / Meenal Shah | Complete **Stability** (either ARD or QCS head can) |
-| Dr. Neha Kapoor (Head of QA) | Complete **only** the QAD checklist; see the client-approval gate block CC26004; approve a ready request |
-| Meera Iyer (Regulatory) | Complete the regulatory assessment on the specification change |
-| Sonal Desai (Employee) | Upload signed client approval evidence |
-| Karan Patel / Nikhil Verma | Work action items; see overdue flag |
-| Rohit Sinha (Admin) · Amit Khanna (Auditor) | Administration, Audit Trail; read-only inspection |
+| **1. Roles & navigation** – Employee/User, HOD, RA Designee, QA Designee, CEO, System Admin; one account may hold several roles | New role model; menus and permissions are the union of an account’s roles (e.g. *Meera Iyer = HOD + RA Designee*). Sidebar shows only permitted items: **Dashboard · My Tasks · Change Controls · Reports · Administration · Audit Trail**. Admin sees Dashboard, Administration and Audit Trail only. Audit Trail is Admin-only; authorized users read each CC’s *Activity History*. |
+| Create Change Control button | In the sidebar above Dashboard, and on the Dashboard |
+| Notifications in the header | Bell with pending tasks and **one-week due-date reminders** (CC due date and action due dates) |
+| **2a Dashboard** | Role-specific: Employee (My Tasks, My open CCs, Due soon + pending list); HOD adds department activity; QA Designee / CEO site-wide status. Duplicate activity/overview widgets removed. |
+| **2b My Tasks** | One inbox for endorsements, reviews, action items, clarifications, corrections, extension approvals and QA decisions. Each row opens the record directly on the required action (action items open the exact action). |
+| **2c Change Controls list** | Search by CC number / title keywords; **Open** requests shown first; quick-view (ⓘ) per row; contextual **Request Extension / Request Amendment** for permitted users. |
+| **2d Create CC** | Dynamic four-column table **S.No · Current State · Proposed Change · Justification**, one change per row, Add Row, expand icon for long text; the same table is shown to every reviewer. Redundant “supporting/reference documents required” prompt removed. Temporary ID until QA issues the CC number. |
+| **2e Documents** | Multiple uploads; preview for HOD, departmental reviewers, RA and QA; **final signed documents** can be added at implementation/closeout; superseded drafts and version history are retained. |
+| **2f Reports** | Search by CC number; downloadable **interim report** (any time) and **final dossier** (closed CCs: details, assessments incl. earlier rounds, actions, extensions, document versions, decisions and e-signatures, activity history). HOD = department scope; QA Designee/CEO = site-wide. |
+| **3a Review & endorsement** | HOD endorsement and QA screening (QA Designee issues the CC number). Departmental HODs assess with the exact QAD checklists; **remarks** are separate from **actions**, which are created and assigned separately **with target dates**. ARD **or** QCS HOD signs Analytical/Stability once (no duplicate sign-off). |
+| **Restart rule** | Any HOD (or RA) clarification/correction → CC returns to the initiator → **initiator’s HOD re-endorses → ALL designated HODs reassess and sign again** (prior answers and action items prefilled and editable; earlier rounds, signatures and history preserved; same CC number). The same applies when RA or QA returns a pre-approval proposal. |
+| **3b RA / client approval** | RA Designee records whether client approval/regulatory action is needed; the related work goes into the **common action list**; QA Designee confirms the RA determination at approval. The client-evidence blocker is **off by default** (open decision). |
+| **3c QA approval & execution** | QA Designee performs routine QA functions; overall due date defaults to **60 days after final QA approval**, editable by authorized QA, never earlier than the latest action deadline. |
+| **3d Implementation & closeout** | Owners complete with mandatory comments and applicable evidence (or “no evidence applicable”); initiator verifies all actions; QA reviews Section X and closes with e-signature; returns/rejections need reasons; closeout can be returned under the same CC number with flagged actions and an initiator resubmit step. |
+| **4 Extensions** | Initiator enters **additional days** + reason (CC details and extension count prefilled). Sequential: **1st–3rd** Initiator’s HOD → QAD HOD (QAD HOD may optionally forward *any* request to the CEO); **4th** Initiator’s HOD → QAD HOD → **CEO (mandatory)**. Approvers approve, reject or return with reasons. Only approved extensions count. CC due date and **pending action deadlines change only after full approval**; original dates and completed actions are retained. |
+| **5 Open decisions** | Tracked in Administration → *Open decisions* (not assumed approved): client/regulatory gates · amendment & cancellation after QA approval · controlled-document/training evidence & Part 11 retention · **fifth extension** (blocked with a message). |
 
-Every Change Control has an **Activity History** tab (all events, decisions, e-signatures, delegation noted) with CSV export.
+## Users
+Employees/Users: Ananya Sharma (Manufacturing, initiator), Pooja Menon (QC), Karan Patel, Nikhil Verma, Sonal Desai, Arjun Nair · HODs: Vikram Rao (Manufacturing), Rajesh Kulkarni (Operations), Dr. Saurabh Joshi (ARD), Meenal Shah (QCS), Vivek Menon (ITR), Kavita Reddy (EHS), **Dr. Neha Kapoor (QAD HOD)** · **Meera Iyer (HOD + RA Designee)** · **Priya Nair (QA Designee)** · **Karuna Rao (CEO, read-only except extension decisions)** · Rohit Sinha (System Admin).
 
-## Modules kept
-Dashboard & My Tasks · Change Controls register · Create/Edit · Change Control workspace (stage tracker, assessments, actions,
-documents, activity history) · Logbook · Extension Requests · Amendments · Reports · Audit Trail · Administration
-(users & roles, assessment checklists, delegations, settings). e-Signature dialog on every signed action.
+## Demo scenarios (pre-loaded, built by the real engine)
+* **Ananya** – respond to the clarification on the BMR-114 CC; create a CC with the change table.
+* **Vikram** – re-endorse a corrected CC (all HODs then reassess); endorse a new request.
+* **Pooja’s HOD (Meenal)** – re-endorsement task; round-2 reassessment with prefilled answers.
+* **Dr. Neha Kapoor** – QAD checklist only; extension waiting for the QAD HOD (*Approve (final)* / *Forward to CEO*).
+* **Karuna Rao (CEO)** – read-only access; decides extensions forwarded to the CEO.
+* **Priya Nair** – screening, approval (RA determination review), closeout, interim/final reports.
+* **Nikhil / Karan** – My Tasks opens the exact action; one action is overdue, one due within a week.
+* **Rohit Sinha** – Administration (users, checklists, settings, open decisions, version/source) and the system-wide Audit Trail.
 
-## What was removed / changed from v1
-- Removed the "Sec I … Sec X" tabs, spec codes in the UI (M15, DEC-17, R2, A04, Part 11 labels), the paper-cutover page and 3 mixed fonts.
-- One font stack, one type scale, one colour system (`src/styles.css`). No external fonts – works offline.
-- Rebuilt around the Master Workflow's 8 stages; paraphrased/invented department questions replaced with the exact QAD wording.
-- Demo data is now produced by the workflow engine, so history is always consistent.
-
-## Assumptions to confirm with Carnegie
-1. **Client-approval timing** is pending in the Master Workflow. Default = required before QA approval (matches QAD form order); switch in Administration → Settings.
-2. **Not Acceptable** resolution outcomes (reassess / return to initiator / reject) are proposed, not defined in either document.
-3. A request returned by QA screening resubmits directly to QA; returned at QA approval/closeout resubmits to that step.
-4. Other departments' assessment answers are hidden until assessments close (proposed).
-5. Extension chain follows SOP 5.11 (60/90/120/180 days; QA → Dept Head → Head of QA → Management); due date moves only after all approvals; request ≥ 1 business day before due date.
-6. Amendment uses the minimal Master Workflow route (initiator requests, QA authorizes, action added). Material-change reassessment is not modelled yet.
-
-## Structure
-```
-src/data/forms.js    exact QAD questions, stages, extension levels   src/engine.js   Master Workflow rules + audit history
-src/data/people.js   roles, users, departments                       src/seed.js     demo data (built by the engine)
-src/views/*          Panels (per-stage actions), Workspace, Forms…   tests/          engine test suite
-docs/                Functional & Product Design Specification (v1.1)
-```
+## Notes
+* Includes the closeout-correction loop added after v2.0 feedback (QA return with flagged actions → initiator returns action → owner adds evidence → initiator resubmits).
+* Not modelled (open decisions): client/regulatory gate timing, post-approval amendment/cancellation rules, Part 11 retention, fifth extension.
+* Structure: `src/data/forms.js` (exact QAD questions, extension chain, open decisions, version) · `src/data/people.js` (roles/users) · `src/engine.js` (workflow rules + audit history) · `src/views/*` · `src/report.js` · `tests/`.

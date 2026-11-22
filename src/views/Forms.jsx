@@ -6,11 +6,8 @@ import { EMPLOYEES } from '../data/people.js';
 import { cx } from '../util.js';
 
 // ---------------- action items editor (owner + due date OR duration) ----------------
-export const blankAction = () => ({ description: '', ownerId: '', mode: 'date', due: '', durationDays: '' });
-export const cleanActions = (rows) =>
-  rows.filter((r) => r.description.trim() || r.ownerId || r.due || r.durationDays).map((r) => ({
-    description: r.description, ownerId: r.ownerId, due: r.mode === 'date' ? r.due : '', durationDays: r.mode === 'days' ? r.durationDays : '',
-  }));
+export const blankAction = () => ({ description: '', ownerId: '', due: '' });
+export const cleanActions = (rows) => rows.filter((r) => r.description.trim() || r.ownerId || r.due).map((r) => ({ description: r.description, ownerId: r.ownerId, due: r.due }));
 
 export function ActionEditor({ rows, onChange, title = 'Action items' }) {
   const set = (i, patch) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -23,17 +20,8 @@ export function ActionEditor({ rows, onChange, title = 'Action items' }) {
           <div className="grid g2">
             <Field label="Action to be completed" req className="grow"><TextArea style={{ minHeight: 60 }} value={r.description} onChange={(e) => set(i, { description: e.target.value })} /></Field>
             <div className="col">
-              <Field label="Owner (any employee)" req>
-                <Select value={r.ownerId} onChange={(e) => set(i, { ownerId: e.target.value })}>
-                  <option value="">Select owner…</option>
-                  {EMPLOYEES.map((u) => <option key={u.id} value={u.id}>{u.name} – {u.dept}</option>)}
-                </Select>
-              </Field>
-              <div className="row wrap">
-                <Seg options={['Due date', 'Days after approval']} value={r.mode === 'date' ? 'Due date' : 'Days after approval'} onChange={(v) => set(i, { mode: v === 'Due date' ? 'date' : 'days' })} />
-                {r.mode === 'date' ? <Input type="date" style={{ width: 160 }} value={r.due} onChange={(e) => set(i, { due: e.target.value })} /> : <Input type="number" min="1" style={{ width: 100 }} placeholder="days" value={r.durationDays} onChange={(e) => set(i, { durationDays: e.target.value })} />}
-                <Button sm variant="ghost" icon={Trash2} onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button>
-              </div>
+              <Field label="Owner (any employee)" req><Select value={r.ownerId} onChange={(e) => set(i, { ownerId: e.target.value })}><option value="">Select owner…</option>{EMPLOYEES.map((u) => <option key={u.id} value={u.id}>{u.name} – {u.dept}</option>)}</Select></Field>
+              <div className="row wrap"><Field label="Target date" req><Input type="date" style={{ width: 170 }} value={r.due} onChange={(e) => set(i, { due: e.target.value })} /></Field><Button sm variant="ghost" icon={Trash2} onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button></div>
             </div>
           </div>
         </div>
@@ -65,13 +53,13 @@ export function Question({ f, answers, set, disabled }) {
 }
 
 // ---------------- Stage 3: department assessment (exact QAD questions for THIS department only) ----------------
-export function AssessmentForm({ def, assessment, onSubmit, actingFor }) {
+export function AssessmentForm({ def, assessment, onSubmit, actingFor, round = 1, existingActions = [] }) {
   const [answers, setAnswers] = useState(assessment.answers || {});
   const [decision, setDecision] = useState('');
   const [comments, setComments] = useState(assessment.comments || '');
   const [justification, setJustification] = useState('');
   const [clar, setClar] = useState('');
-  const [actions, setActions] = useState([blankAction()]);
+  const [actions, setActions] = useState(existingActions.length ? existingActions.map((a) => ({ description: a.description, ownerId: a.ownerId, due: a.due || '' })) : [blankAction()]);
   const set = (id, v) => setAnswers((a) => ({ ...a, [id]: v }));
   const prior = assessment.clarifications.filter((c) => c.a);
   return (
@@ -82,7 +70,8 @@ export function AssessmentForm({ def, assessment, onSubmit, actingFor }) {
       {actingFor && <Banner tone="info">You are completing this on behalf of <b>{actingFor}</b> (active delegation). Your signature will show the delegation.</Banner>}
       {prior.map((c, i) => <Banner key={i} tone="success"><b>Earlier clarification:</b> {c.q}<br /><span className="small">Answer: {c.a}</span></Banner>)}
       <div>{def.fields.map((f) => <Question key={f.id} f={f} answers={answers} set={set} />)}</div>
-      <Field label="Impact/Required Action Items/Comments"><TextArea value={comments} onChange={(e) => setComments(e.target.value)} /></Field>
+      {round > 1 && <Banner tone="info"><b>Review round {round}.</b> Your earlier answers and action items are prefilled – edit what changed, then sign again. Earlier rounds stay on record.</Banner>}
+      <Field label="Remarks"><TextArea value={comments} onChange={(e) => setComments(e.target.value)} /></Field>
       <div>
         <div className="lbl mb">Is the change acceptable?</div>
         <div className="grid g4">
@@ -93,7 +82,7 @@ export function AssessmentForm({ def, assessment, onSubmit, actingFor }) {
           ))}
         </div>
       </div>
-      {decision === 'accept_action' && <ActionEditor rows={actions} onChange={setActions} />}
+      {decision === 'accept_action' && <ActionEditor rows={actions} onChange={setActions} title="Actions arising from this assessment (assigned separately, with target dates)" />}
       {decision === 'clarify' && <Field label="Clarification needed from the initiator" req><TextArea value={clar} onChange={(e) => setClar(e.target.value)} /></Field>}
       {decision === 'reject' && <Field label="Justification (for QA resolution)" req><TextArea value={justification} onChange={(e) => setJustification(e.target.value)} /></Field>}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -116,7 +105,7 @@ export function AssessmentReadOnly({ def, assessment }) {
         const text = Array.isArray(v) ? v.map((x) => (x === 'Other' && a[f.id + 'Other'] ? `Other: ${a[f.id + 'Other']}` : x)).join(', ') : v === 'Other' && a[f.id + 'Other'] ? `Other: ${a[f.id + 'Other']}` : v;
         return <div key={f.id}><span>{f.label}</span><b>{text || '—'}</b></div>;
       })}
-      {assessment.comments && <div><span>Impact/Required Action Items/Comments</span><b style={{ maxWidth: '60%', textAlign: 'right' }}>{assessment.comments}</b></div>}
+      {assessment.comments && <div><span>Remarks</span><b style={{ maxWidth: '60%', textAlign: 'right' }}>{assessment.comments}</b></div>}
     </div>
   );
 }
